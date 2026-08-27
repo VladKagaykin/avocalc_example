@@ -1,77 +1,79 @@
 use avocalc::*;
-use std::time::Instant;
-use gl_headless::gl_headless;
+use std::error::Error;
 
-// Более сложное выражение для нагрузки
-const EXPR: &str = "TexCoord.x * TexCoord.y + sin(TexCoord.x * 50.0) * cos(TexCoord.y * 50.0) + pow(TexCoord.x, 3.0) - pow(TexCoord.y, 2.0)";
-const ITERATIONS: usize = 100;   // количество повторений для усреднения
+fn main() -> Result<(), Box<dyn Error>> {
+    // Очистка публичных карт (опционально)
+    {
+        let mut expr_map = Expressions.lock().unwrap();
+        expr_map.clear();
+        let mut shader_obj_map = Shader_objects.lock().unwrap();
+        shader_obj_map.clear();
+    }
 
-#[gl_headless]
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Сохраняем выражение в глобальный реестр
+    // Пример 1: одна переменная
+    let name1 = "example1";
+    let expr1 = "{x} * 2.0 + 3.5";
     {
         let mut map = Expressions.lock().unwrap();
-        map.insert("test".to_string(), EXPR.to_string());
+        map.insert(name1.to_string(), expr1.to_string());
+    }
+    {
+        let mut map = Shader_objects.lock().unwrap();
+        map.insert("x".to_string(), "2.0".to_string());
     }
 
-    // 2. Компилируем шейдеры (делаем это один раз до замера)
-    Compile_shader("test")?;
+    Compile_shader(name1)?;
+    let result1 = Calculation_to_texture(name1)?;
+    println!("1) '{}' при x = 2.0  →  {:.3}", expr1, result1);
 
-    // 3. Замер времени на GPU (только выполнение, без компиляции)
-    let start_gpu = Instant::now();
-    let mut gpu_texture = Vec::new();
-    for _ in 0..ITERATIONS {
-        gpu_texture = Calculation_to_texture("test")?; // размер 256x256, формат f32
+    // Пример 2: несколько переменных
+    let name2 = "example2";
+    let expr2 = "{a} * {b} + {c}";
+    {
+        let mut map = Expressions.lock().unwrap();
+        map.insert(name2.to_string(), expr2.to_string());
     }
-    let duration_gpu = start_gpu.elapsed();
-
-    // 4. Замер времени на CPU (аналогичное количество вычислений)
-    let width = 256;
-    let height = 256;
-    let total_pixels = width * height;
-
-    let start_cpu = Instant::now();
-    let mut cpu_last = Vec::with_capacity(total_pixels);
-    for iter in 0..ITERATIONS {
-        let mut cpu_results = Vec::with_capacity(total_pixels);
-        for y in 0..height {
-            for x in 0..width {
-                // Координаты texel-центра (как в OpenGL)
-                let tx = (x as f32 + 0.5) / width as f32;
-                let ty = (y as f32 + 0.5) / height as f32;
-                let val = tx * ty + (tx * 50.0).sin() * (ty * 50.0).cos() + tx.powi(3) - ty.powi(2);
-                cpu_results.push(val);
-            }
-        }
-        // Сохраняем результат последней итерации для сравнения
-        if iter == ITERATIONS - 1 {
-            cpu_last = cpu_results;
-        }
+    {
+        let mut map = Shader_objects.lock().unwrap();
+        map.insert("a".to_string(), "1.5".to_string());
+        map.insert("b".to_string(), "2.0".to_string());
+        map.insert("c".to_string(), "0.5".to_string());
     }
-    let duration_cpu = start_cpu.elapsed();
 
-    // 5. Сравнение результатов (последняя итерация)
-    let mut max_diff = 0.0f32;
-    let mut sum_diff = 0.0f32;
-    for (&gpu, &cpu) in gpu_texture.iter().zip(cpu_last.iter()) {
-        let diff = (gpu - cpu).abs();
-        if diff > max_diff {
-            max_diff = diff;
-        }
-        sum_diff += diff;
+    Compile_shader(name2)?;
+    let result2 = Calculation_to_texture(name2)?;
+    println!("2) '{}' при a=1.5, b=2.0, c=0.5  →  {:.3}", expr2, result2);
+
+    // Пример 3: обработка ошибки (отсутствует uniform)
+    let name3 = "example3";
+    let expr3 = "{missing} * 2.0";
+    {
+        let mut map = Expressions.lock().unwrap();
+        map.insert(name3.to_string(), expr3.to_string());
     }
-    let avg_diff = sum_diff / (total_pixels as f32);
+    // НЕ добавляем "missing" в Shader_objects
 
-    // 6. Вывод статистики
-    println!("Expression: {}", EXPR);
-    println!("Resolution: {}x{}", width, height);
-    println!("Iterations: {}", ITERATIONS);
-    println!("GPU total time: {:?} (avg per frame: {:?})",
-             duration_gpu, duration_gpu / ITERATIONS as u32);
-    println!("CPU total time: {:?} (avg per frame: {:?})",
-             duration_cpu, duration_cpu / ITERATIONS as u32);
-    println!("Max diff: {:.6e}", max_diff);
-    println!("Avg diff: {:.6e}", avg_diff);
+    Compile_shader(name3)?;
+    match Calculation_to_texture(name3) {
+        Ok(v) => println!("3) Неожиданный успех: {}", v),
+        Err(e) => println!("3) Ожидаемая ошибка: {}", e),
+    }
+
+    // Пример 4: целочисленный литерал (используем 10.0 вместо 10)
+    let name4 = "example4";
+    let expr4 = "{y} + 10.0";  // <-- изменено с 10 на 10.0
+    {
+        let mut map = Expressions.lock().unwrap();
+        map.insert(name4.to_string(), expr4.to_string());
+    }
+    {
+        let mut map = Shader_objects.lock().unwrap();
+        map.insert("y".to_string(), "5.0".to_string());
+    }
+
+    Compile_shader(name4)?;
+    let result4 = Calculation_to_texture(name4)?;
+    println!("4) '{}' при y = 5.0  →  {:.3}", expr4, result4);
 
     Ok(())
 }

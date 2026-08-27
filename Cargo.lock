@@ -7,7 +7,7 @@ name = "avocalc"
 version = "0.1.0"
 dependencies = [
  "gl",
- "gl-headless",
+ "glfw",
 ]
 
 [[package]]
